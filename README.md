@@ -1,4 +1,4 @@
-# GLowworm
+# Glowworm
 Cute little WebGL Library written in Javascript. 
 
 
