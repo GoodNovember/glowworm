@@ -11,6 +11,8 @@ function Glowworm(targetElement){
 
 	var gl, canvas;
 
+	var isWebGLEnabled = false;
+
 	function init(){
 
 		if (typeof targetElement === "string"){
@@ -20,8 +22,8 @@ function Glowworm(targetElement){
 		}
 		gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
 		if(!gl){
-			console.error("Webgl is not supported by this browser!");
-			return;
+			console.warn("Webgl is not supported by this browser!");
+			return false;
 		}
 
 		gl.enable(gl.BLEND)
@@ -37,6 +39,7 @@ function Glowworm(targetElement){
 			loadImages: loadImages,
 		};
 		self.clear = clear;
+		self.supportsWebGl = supportsWebGl;
 		self.resetViewport = resetViewport;
 		self.resize = resize;
 		self.resizeTo = resizeTo;
@@ -55,7 +58,9 @@ function Glowworm(targetElement){
 		};
 		self.textures = {
 			create:createTexture,
+			createBlank:createBlankTexture,
 			updateWithVideo:updateTextureWithVideo,
+			update:updateTexture,
 		};
 		self.buffers = {
 			init:initBuffer,
@@ -65,6 +70,10 @@ function Glowworm(targetElement){
 		}
 	}
 	init();
+
+	function supportsWebGl(){
+		return 
+	}
 
 	function errorWrapper(context, value){
 		var newErrorLevel = {};
@@ -225,6 +234,11 @@ function Glowworm(targetElement){
 
 	function resize(){
 		var realToCSSPixels = window.devicePixelRatio; // default is 1, but could be up to 3... may need to optomize this a bit
+		
+		// TODO: FIX THIS WEIRD THING THAT REQUIRES YOU TO USE 1 INSTEAD OF window.devicePixelRatio
+		// There is a bug which occurs on IOS which forces the resize to occurs
+		// in ways in which the android version does not. Figure out why
+		// this is.
 
 		var displayHeight = Math.floor(gl.canvas.clientHeight * realToCSSPixels);
 		var displayWidth = Math.floor(gl.canvas.clientWidth * realToCSSPixels);
@@ -325,8 +339,42 @@ function Glowworm(targetElement){
 			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, imageData);
 		}else{
 			gl.deleteTexture(texture);
+			console.log("Should have deleted:", texture);
+			if (typeof callback === "function"){
+				var err = new Error("Bad ImageData");
+				callback(err);
+			}
 		}
 		
+
+		if (typeof callback === "function"){
+			callback(null, texture);
+		}else{
+			return texture;
+		}
+	}
+
+	function createBlankTexture(width, height, callback){
+		var texture = gl.createTexture();
+		if (!texture){
+			if (typeof callback === "function"){
+				callback(new Error("Unable to create a texture!"))
+			}
+			throw new Error("Unable to create texture!");
+		}
+		gl.bindTexture(gl.TEXTURE_2D, texture);
+
+		var colorCount = width * height * 4
+
+		var blackArray = new Uint8Array(colorCount);
+
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0 ,gl.RGBA, gl.UNSIGNED_BYTE, blackArray);
+
+		console.log("created bank texture w:", width, 'h:', height, texture, colorCount);
 
 		if (typeof callback === "function"){
 			callback(null, texture);
@@ -343,18 +391,29 @@ function Glowworm(targetElement){
 		}
 	}
 
+	function updateTexture(texture, newData){
+		if(texture && newData){
+			gl.bindTexture(gl.TEXTURE_2D, texture);
+// 			console.log("I want to update text:", texture, "With new data:", newData);
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, newData);
+		}
+	}
+
 	function loadImage(url, callback){
 		var image = new Image();
 		image.src = url;
 		image.onload = function(){
-			callback(image);
+			callback(null, image, url);
+		}
+		image.onerror = function(event){
+			callback(event);
 		}
 	}
 
 	function loadImageAndIndex(url, index, callback){
 		// special helper function for the loadImages() function.
-		loadImage(url, function(image){
-			callback(index, image);
+		loadImage(url, function(error, image){
+			callback(error, index, image);
 		})
 	}
 
@@ -362,28 +421,133 @@ function Glowworm(targetElement){
 		// The index of the url of the image that you specify
 		// is where the final image data is placed in the done array. 
 
-		// you will only ge the done array once all the images are downloaded.
+		// you will only ge the done array once all the images are either downloaded or errored out.
 
 		var count = 0;
 		var expected = urlArray.length;
 		var done = createEmptyArray(urlArray.length, undefined);
+		var errors = [];
+		function imageLoadError(index, error, url){
+			this.index = index;
+			this.error = error;
+			this.url = url;
+		}
 		for(var i = 0; i < urlArray.length; i++){
 			var index = i;
 			var url = urlArray[index];
-			loadImageAndIndex(url, index, imageLoaded);
+			loadImageAndIndex(url, index, imageResponse);
 		}
 
-		function imageLoaded(index, image){
+		function imageResponse(error, index, image){
 			count++;
-			done[index] = image;
-			// console.log("index:", index);
+			if (error){
+				var err = new imageLoadError(index, error, urlArray[index]);
+				errors.push(err);
+			}else{
+				done[index] = image;
+				// console.log("index:", index);
+
+			}
 			if (count === expected){
-				complete(done);
+				if (errors.length > 0){
+					complete(errors, done);
+				}else{
+					complete(null, done);
+				}
+				// complete(null, done);
 			}
 		}
 
-		function complete(output){
-			callback(output);
+		function checkImages(imageArray){
+
+			var detailsObj = {
+				loadedCount: 0,
+				errorCount: 0,
+				allImagesAreTheSameSize: true,
+				allImagesLoaded: true,
+				imageWidth:null,
+				imageHeight:null,
+				avgImageWidth:null,
+				avgImageHeight:null,
+				safeFirstImageIndex:-1,
+			}
+
+			var knownWidths = [];
+			var knownHeights = [];
+			var exampleImg = null;
+			for(var i = 0; i < imageArray.length; i++){
+				var img = imageArray[i];
+				if (img){
+					if(exampleImg === null){
+						exampleImg = img;
+						detailsObj.safeFirstImageIndex = i;
+					}
+					detailsObj.loadedCount++;
+					knownHeights.push(img.height)
+					knownWidths.push(img.width);
+				}else{
+					detailsObj.errorCount++;
+					if(detailsObj.allImagesLoaded){
+						detailsObj.allImagesLoaded = false;
+					}
+				}
+			}
+			function avg(array){
+				if (array.length === 0){
+					return null;
+				}
+				var output = 0;
+				for(var i = 0; i < array.length; i++){
+					var value = array[i];
+					output += value;
+				}
+				return output/array.length;
+			}
+			function allAreTheSame(array){
+				var output = true;
+				if (array.length > 1){
+					var lastitem = array[0];
+					for(var i = 1; i < array.length; i++){
+						var value = array[i];
+						if (lastitem !== value){
+							output = false;
+							break;
+						}
+						lastitem = value;
+					}
+					return output;
+				}else if (array.length === 1){
+					return true;
+				}else if (array.length === 0){
+					return false;
+				}
+			}
+
+			detailsObj.avgImageWidth = avg(knownWidths);
+			detailsObj.avgImageHeight = avg(knownHeights);
+
+			var sameHeight = allAreTheSame(knownHeights);
+			var sameWidth = allAreTheSame(knownWidths);
+
+			if (sameHeight && sameWidth){
+				detailsObj.allImagesAreTheSameSize = true;
+				if(exampleImg){
+					detailsObj.imageWidth = exampleImg.width;
+					detailsObj.imageHeight = exampleImg.height;
+				}
+			}else{
+				detailsObj.allImagesAreTheSameSize = false;
+			}
+			
+			return detailsObj;
+		}
+
+		function complete(error, images){
+			if (error){
+				callback(error, images, checkImages(images));
+			}else{
+				callback(null, images, checkImages(images));
+			}
 		}
 	}
 
