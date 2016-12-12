@@ -116,15 +116,15 @@ glow.shaders.createProgram_FromFiles(vImageShader, fImageShader, function(err, p
 			glow.clear();
 			glow.resize();
 			glow.resetViewportToAspectRatio((1279.0/854.0));
-
-			// draw what we wrote on the last round.
-			gl.drawArrays(gl.TRIANGLES, 0, 6);
 			
 			// when we are confident we have what we need, pull down a frame from the videos.
 			//if(bothVideosCanPlay() && videosAreLoaded()){
 				pullTextureFromVideoElm(videoElm, 0);
 				// pullFramesFromVideos(colorVideoElm, maskVideoElm);
 			//}
+			
+			// draw the scene.
+			gl.drawArrays(gl.TRIANGLES, 0, 6);
 		}
 
 ```
