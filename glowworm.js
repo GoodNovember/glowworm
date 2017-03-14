@@ -1,11 +1,4 @@
-// the Glowworm WebGL library
-// First Created by Victor Lawrence, Nov. 2016
-
-/*
-	This plugin packages a whole bunch of helper functions when dealing with Webgl.
-*/
-
-function Glowworm(targetElement){
+function Glowworm(targetElement, label){
 	
 	var self = this;
 
@@ -20,16 +13,20 @@ function Glowworm(targetElement){
 		}else{
 			canvas = targetElement;
 		}
+		// console.count("Glow Load");
 		gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+
+		// console.log(label,"Got Context:", canvas.width, canvas.height);
+
 		if(!gl){
 			console.warn("Webgl is not supported by this browser!");
 			return false;
 		}
 
 		gl.enable(gl.BLEND)
-      	//gl.enable(gl.DEPTH_TEST);
-		  gl.disable(gl.DEPTH_TEST);
-		  gl.depthFunc(gl.LESS);
+		//gl.enable(gl.DEPTH_TEST);
+		gl.disable(gl.DEPTH_TEST);
+		gl.depthFunc(gl.LESS);
 
 		self.gl = gl;
 		self.canvas = canvas;
@@ -40,26 +37,47 @@ function Glowworm(targetElement){
 		};
 		self.clear = clear;
 		self.supportsWebGl = supportsWebGl;
-		self.resetViewport = resetViewport;
+		
 		self.resize = resize;
 		self.resizeTo = resizeTo;
 		self.resizeAndMatchViewport = resizeAndMatchViewport;
 		self.resizeToAspectRatio = resizeToAspectRatio;
+
+		self.resetViewport = resetViewport;
+		self.resetViewportTo = resetViewportTo;
 		self.resetViewportToAspectRatio = resetViewportToAspectRatio;
 		self.resetViewportToMatchVideoElementAspectRatio = resetViewportToMatchVideoElementAspectRatio;
+		self.resetViewportContainMediaSize = resetViewportContainMediaSize;		
+
 		self.getAttributes = getAttributes;
 		self.getUniforms = getUniforms;
+		
 		self.shaders = {
 			create:createShader,
 			createVertexShader_FromFile:_CreateVertexShaderFromFile,
 			createFragmentShader_FromFile:_CreateFragmentShaderFromFile,
 			createProgram:createProgram,
 			createProgram_FromFiles:createProgramFromShaderFiles,
+			createProgramFromShaderStrings:createProgramFromShaderStrings,
 		};
+		self.renderBuffers = {
+			create:createRenderBuffer,
+			// attachTexture: attachTextureToRenderBuffer,
+		},
+		self.frameBuffers = {
+			activate:activateFrameBuffer,
+			deactivate:deactivateFrameBuffer,
+			create:createFrameBuffer,
+			applyTexture:applyTextureToFrameBuffer,
+			applyRenderBuffer:applyRenderBufferToFrameBuffer,
+			canReadActive:canReadActiveFrameBuffer,
+		},
 		self.textures = {
+			maxUnits:getMaxTextureUnits,
 			create:createTexture,
 			createBlank:createBlankTexture,
 			updateWithVideo:updateTextureWithVideo,
+			updateWithArrayBuffer:updateTextureWithArrayBuffer,
 			update:updateTexture,
 		};
 		self.buffers = {
@@ -68,6 +86,7 @@ function Glowworm(targetElement){
 		self.rectangles = {
 			create:createRectangle,
 		}
+	
 	}
 	init();
 
@@ -156,6 +175,29 @@ function Glowworm(targetElement){
 		})
 	}
 
+	function createFragmentShaderFromString(fileString, callback){
+		var errContext = "createFragmentShaderFromString() [" + fileString + "]";
+		createShader(gl.FRAGMENT_SHADER, fileString, function(err, shader){
+			if (err){
+				var wrappedError = errorWrapper(errContext, err);
+				callback(wrappedError);
+			}else{
+				callback(null, shader);
+			}
+		})
+	}
+	function createVertexShaderFromString(fileString, callback){
+		var errContext = "createVertexShaderFromString() [" + fileString + "]";
+		createShader(gl.VERTEX_SHADER, fileString, function(err, shader){
+			if (err){
+				var wrappedError = errorWrapper(errContext, err);
+				callback(wrappedError);
+			}else{
+				callback(null, shader);
+			}
+		})
+	}
+
 	function createProgram(vertexShader, fragmentShader, callback){
 		var program = gl.createProgram();
 		var errContext = "createProgram()";
@@ -208,6 +250,46 @@ function Glowworm(targetElement){
 		}
 	}
 
+	function createProgramFromShaderStrings(vertexShaderString, fragmentShaderString, callback){
+		var vShader_compiled;
+		var fShader_compiled;
+
+		var errors = [];
+		var counter = 0;
+
+		createFragmentShaderFromString(fragmentShaderString, function(err, fShader){
+			if (err){
+				errors.push(err);
+			}else{
+				fShader_compiled = fShader;
+			}
+			counter++;
+			if (counter === 2){
+				continueTheJourney();
+			}
+		})
+		createVertexShaderFromString(vertexShaderString, function(err, vShader){
+			if (err){
+				errors.push(err);
+			}else{
+				vShader_compiled = vShader;
+			}
+			counter++;
+			if (counter === 2){
+				continueTheJourney();
+			}
+		})
+
+		function continueTheJourney(){
+			if (errors.length > 0){
+				callback(errors);
+			}else{
+				createProgram(vShader_compiled, fShader_compiled, callback);
+			}
+		}
+
+	}
+
 	function getAttributes(program){
 		var count = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
 		var output = {};
@@ -232,20 +314,20 @@ function Glowworm(targetElement){
 		return output;
 	}
 
-	function resize(){
+	function resize(hadToResize){
 		var realToCSSPixels = window.devicePixelRatio; // default is 1, but could be up to 3... may need to optomize this a bit
+		// var realToCSSPixels = 1; 
 		
-		// TODO: FIX THIS WEIRD THING THAT REQUIRES YOU TO USE 1 INSTEAD OF window.devicePixelRatio
-		// There is a bug which occurs on IOS which forces the resize to occurs
-		// in ways in which the android version does not. Figure out why
-		// this is.
-
 		var displayHeight = Math.floor(gl.canvas.clientHeight * realToCSSPixels);
 		var displayWidth = Math.floor(gl.canvas.clientWidth * realToCSSPixels);
 
 		if(gl.canvas.width !== displayWidth || gl.canvas.height !== displayHeight){
 			gl.canvas.width = displayWidth;
 			gl.canvas.height = displayHeight;
+			// console.log(label,"Resize!", canvas.width, canvas.height);
+			if(typeof hadToResize === "function"){
+				hadToResize();
+			}
 		}
 	}
 
@@ -278,7 +360,11 @@ function Glowworm(targetElement){
 	}
 
 	function resetViewport(){
-		gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+		gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+	}
+	
+	function resetViewportTo(x1, y1, x2, y2){
+		gl.viewport(x1, y1, x2, y2);
 	}
 
 	function resetViewportToAspectRatio(ratio){
@@ -298,6 +384,55 @@ function Glowworm(targetElement){
 
 	}
 
+	function resetViewportContainMediaSize(mediaWidth, mediaHeight){
+		// START CONTAIN CODE ///
+
+			var wizardHeight = canvas.height;
+			var wizardWidth = canvas.width;
+			
+			var mediaRatio = mediaWidth / mediaHeight / 2;
+
+			var wizardRatio = (wizardWidth / wizardHeight) * mediaRatio;			
+
+			var isLandscape = wizardRatio > 1;
+			var isPortrait = wizardRatio < 1;
+			var isSquare = wizardRatio == 1;
+
+			// console.log("L", isLandscape, "P", isPortrait, "S", isSquare);
+
+			var leftOffset = 200;
+			var bottomOffset = 0;
+			var rightOffset = 200;
+
+			var mediaScaledHeight = (wizardWidth * mediaRatio) ;
+			var mediaScaledWidth = (wizardHeight / mediaRatio);
+
+			if (isLandscape){
+				// we want padding on either side, image is full height.
+				leftOffset = (wizardWidth - mediaScaledWidth)/2;
+				mediaScaledHeight = wizardHeight;
+				// console.log("Is Landscape", wizardRatio, mediaRatio);
+			}else if (isPortrait || isSquare){
+				// we want it clamped to the bottom, full width, with padding on top.
+				mediaScaledWidth = wizardWidth;
+				leftOffset = 0;
+				rightOffset = 0;
+				bottomOffset = 0;
+				// console.log("Is portrait", wizardRatio, mediaRatio);
+			}else{
+				// console.log("Is Wut?");
+			}
+
+			var calcX1 = leftOffset;
+			var calcY1 = bottomOffset;
+			var calcX2 = mediaScaledWidth;
+			var calcY2 = mediaScaledHeight;
+
+			if (mediaHeight && mediaWidth){
+				resetViewportTo(calcX1, calcY1, calcX2, calcY2);
+			}
+	}
+
 	function resetViewportToMatchVideoElementAspectRatio(videoElement){
 		var videoWidth = videoElement.width;
 		var videoHeight = videoElement.height;
@@ -306,19 +441,24 @@ function Glowworm(targetElement){
 	}
 
 	function clear(){
-		gl.clearColor(0,0,0,0);
+		gl.clearColor(0.0,0.0,0.0,0.0);
 		gl.clear(gl.COLOR_BUFFER_BIT);
 	}
 
 	function initBuffer(data, elmPerVertex, attribute){
-		var buffer = gl.createBuffer();
-		if(!buffer){
-			throw new Error("Failed to create buffer.");
+
+		if(typeof attribute === "undefined"){
+			throw new Error("Attribute provided is undefined.");
+		}else{
+			var buffer = gl.createBuffer();
+			if(!buffer){
+				throw new Error("Failed to create buffer.");
+			}
+			gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+			gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+			gl.vertexAttribPointer(attribute, elmPerVertex, gl.FLOAT, false, 0,0);
+			gl.enableVertexAttribArray(attribute);
 		}
-		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-		gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-		gl.vertexAttribPointer(attribute, elmPerVertex, gl.FLOAT, false, 0,0);
-		gl.enableVertexAttribArray(attribute);
 	}
 
 	function createTexture(imageData, callback){
@@ -335,8 +475,13 @@ function Glowworm(targetElement){
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+		// gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+
 		if (imageData){
 			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, imageData);
+			// gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_SHORT_4_4_4_4, imageData);
+
 		}else{
 			gl.deleteTexture(texture);
 			console.log("Should have deleted:", texture);
@@ -374,7 +519,7 @@ function Glowworm(targetElement){
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0 ,gl.RGBA, gl.UNSIGNED_BYTE, blackArray);
 
-		console.log("created bank texture w:", width, 'h:', height, texture, colorCount);
+		// console.log("created blank texture w:", width, 'h:', height, texture, colorCount);
 
 		if (typeof callback === "function"){
 			callback(null, texture);
@@ -393,10 +538,18 @@ function Glowworm(targetElement){
 
 	function updateTexture(texture, newData){
 		if(texture && newData){
-			gl.bindTexture(gl.TEXTURE_2D, texture);
-// 			console.log("I want to update text:", texture, "With new data:", newData);
+			// console.dir(newData);
+			// gl.bindTexture(gl.TEXTURE_2D, texture);
+			// console.log("I want to update text:", texture, "With new data:", newData);
+			// gl.bindTexture(gl.TEXTURE_2D, texture);
+			// gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, newData);
+			// gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
 			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, newData);
 		}
+	}
+
+	function updateTextureWithArrayBuffer(width, height, pixelData){
+		gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,width,height,gl.RGBA, gl.UNSIGNED_BYTE, newData);
 	}
 
 	function loadImage(url, callback){
@@ -565,6 +718,8 @@ function Glowworm(targetElement){
 		var y1 = y;
 		var y2 = y + height;
 
+		// console.log("Attr:" + label, attribute);
+
 		var rectData = new Float32Array([
 			/* 
 
@@ -585,12 +740,12 @@ function Glowworm(targetElement){
 
 			/*
 
-					 x2y1
-				    /|
-				   / |
-				  /  |	height
-				 /   |
-				/----+
+					x2y1
+					 /|
+					/ |
+				   /  |	height
+				  /   |
+				 /----+
 			x1y2	 x2y2
 
 				width
@@ -606,4 +761,89 @@ function Glowworm(targetElement){
 		initBuffer(rectData, 2, attribute);
 	}
 
-}
+	function createFrameBuffer(width, height, callback){
+		if (width && height){
+			var frameBuffer = gl.createFramebuffer();
+			if (frameBuffer){
+				gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuffer);
+				// gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height);
+				if(typeof callback === "function"){
+					frameBuffer.width = width;
+					frameBuffer.height = height;
+					callback(null, frameBuffer);
+				}
+			}else if (!frameBuffer){
+				if (typeof callback === "function"){
+					callback(new Error("Unable to create a frameBuffer!"))
+				}
+				throw new Error("Unable to create frameBuffer!");
+			}
+		}else{
+	
+			if (typeof callback === "function"){
+				callback(new Error("Unable to create a frameBuffer without width and height specified."))
+			}
+			throw new Error("Unable to create frameBuffer!");
+			
+		}
+	}
+
+	function createRenderBuffer(width, height, callback){
+		if (width && height){
+			var renderBuffer = gl.createRenderbuffer();
+			if (renderBuffer){
+				gl.bindRenderbuffer(gl.RENDERBUFFER, renderBuffer);
+				gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA4, width, height);
+				if(typeof callback === "function"){
+					callback(null, renderBuffer);
+				}
+			}else if (!renderBuffer){
+				if (typeof callback === "function"){
+					callback(new Error("Unable to create a renderBuffer!"))
+				}
+				throw new Error("Unable to create renderbuffer!");
+			}
+		}else{
+	
+			if (typeof callback === "function"){
+				callback(new Error("Unable to create a renderBuffer without width and height specified."))
+			}
+			throw new Error("Unable to create renderbuffer!");
+			
+		}
+
+	}
+
+	function applyTextureToFrameBuffer(texture, frameBuffer){
+		gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuffer);
+		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		// gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, renderbuffer);
+	}
+	function applyRenderBufferToFrameBuffer(renderbuffer, frameBuffer){
+		gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuffer);
+		gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, renderbuffer);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+	}
+
+	function activateFrameBuffer(frameBuffer){
+		gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuffer);
+	}
+	function deactivateFrameBuffer(){
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+	}
+
+	function canReadActiveFrameBuffer(){
+		return gl.checkFramebufferStatus(gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE;
+	}
+
+	var maxTexUnits;
+	function getMaxTextureUnits(){
+		if(!maxTexUnits){
+			maxTexUnits = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+		}
+
+		return maxTexUnits;
+	}
+
+}// end glowworm
